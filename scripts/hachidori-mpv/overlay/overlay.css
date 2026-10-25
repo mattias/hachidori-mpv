@@ -57,6 +57,20 @@ html, body {
   white-space: pre-wrap;
 }
 
+/* The line repeats (the repeat key). Not page text, so never in a sentence. */
+#subtitle.repeating::after {
+  content: "↻";
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translate(0.3em, -50%);
+  font-size: 0.8em;
+  font-weight: 800;
+  color: #c4b5fd;
+  -webkit-text-stroke: 0.1em #000;
+  paint-order: stroke fill;
+}
+
 /* A line break that is not page text, so the lines stay one sentence. */
 #subtitle .line + .line::before {
   content: "\A";

@@ -87,10 +87,25 @@ replaces mpv's subtitles with its own.
   lookups, lookup counts, duplicate detection against your collection, the
   personal dictionary pencil and custom buttons.
 
+While the overlay is on:
+
+| Key | | |
+| --- | --- | --- |
+| `←` / `→` | `key_prev_sub` / `key_next_sub` | Previous / next subtitle line |
+| `r` | `key_repeat` | Repeat the current line over and over; press again to stop. `←`/`→` move the loop to the previous/next line, and a ↻ beside the subtitle shows it is on |
+
+These are set in the plugin's Settings window (or the conf) and give mpv its
+own bindings back when the overlay is off. The repeat is mpv's A-B loop over
+the line, padded like the sentence audio.
+
+Always:
+
 | Key | Binding | |
 | --- | --- | --- |
 | `Alt+h` | `hachidori_mpv/toggle` | Overlay on/off (mpv's subtitles come back) |
+| `Alt+o` | `hachidori_mpv/plugin-settings` | The plugin's Settings window |
 | `Alt+H` | `hachidori_mpv/settings` | Hachidori Settings |
+| — | `hachidori_mpv/repeat` | Repeat on/off, for another key in `input.conf` |
 | — | `hachidori_mpv/reload` | Reload the overlay page |
 
 Rebind them in `input.conf`, e.g. `Ctrl+d script-binding hachidori_mpv/settings`.
@@ -99,13 +114,26 @@ Hachidori's Settings window is the linked Hachidori: changes there change the
 shared Hachidori, except the reading-surface preferences overlay mode keeps
 per overlay (activation, scan delays, popup size and so on).
 
-## Configuration
+## Settings
 
-`script-opts/hachidori-mpv.conf` documents every option: subtitle font,
-size, colours and position; pausing on hover; screenshot format, height and
-quality; audio format, bitrate and padding; field overrides; ffmpeg,
-AnkiConnect and relay addresses. For more styling, put CSS in
-`script-opts/hachidori-mpv.css`, for example:
+**Alt+o** opens the plugin's Settings window. Every change is saved at once
+to `script-opts/hachidori-mpv.conf` and applies to every open mpv:
+
+- **Picture** — a still frame (format, height, quality) or an **animated
+  clip** with [Anki Miner](https://github.com/0xzerolight/anki_miner)'s
+  settings: AVIF or WebP (AVIF falls back to WebP when ffmpeg has no
+  SVT-AV1), clip length from the subtitle's start, capped by the subtitle
+  (*0 = same as sentence audio*), and the Small / Balanced / High / Custom
+  size presets (frame rate, height, quality).
+- **Sentence audio** — Opus or MP3, bitrate, padding before and after.
+- **Card fields** — other fields than the Template's own.
+- **Playback & keys** — the navigation and repeat keys, pausing on hover,
+  starting with every video, hiding mpv's subtitles.
+- **Subtitles** — font, size, weight, colours, outline, position.
+- **Advanced** — ffmpeg, AnkiConnect and relay addresses, developer tools.
+
+The conf documents every option for editing by hand. For more styling, put
+CSS in `script-opts/hachidori-mpv.css`, for example:
 
 ```css
 #subtitle { font-family: "Klee One"; letter-spacing: 0.05em; }

@@ -105,6 +105,7 @@
     state = value || state;
     if (value?.title) document.title = value.title;
     render();
+    subtitle.classList.toggle("repeating", state.repeat === "yes");
   });
   // mpv's pointer, while this window lets clicks through.
   window.hdmpv.onPointer(value => {

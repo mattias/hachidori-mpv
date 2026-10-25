@@ -138,6 +138,65 @@ async function takeScreenshot({ mpv, ffmpeg, options, base, tmp }) {
   return out;
 }
 
+const encoderCache = new Map();
+async function hasEncoder(ffmpeg, encoder) {
+  const key = `${ffmpeg}\n${encoder}`;
+  if (!encoderCache.has(key)) {
+    encoderCache.set(key, run(ffmpeg, ["-hide_banner", "-encoders"], 15000)
+      .then(out => new RegExp(`\\s${encoder}\\s`).test(out), () => false));
+  }
+  return encoderCache.get(key);
+}
+
+// Anki Miner's animated picture: AVIF (libsvtav1) or WebP (libwebp_anim),
+// falling back from AVIF to WebP when this ffmpeg has no SVT-AV1.
+async function animatedFormat(ffmpeg, configured) {
+  const wanted = String(configured || "avif").toLowerCase() === "webp" ? "webp" : "avif";
+  if (wanted === "avif" && await hasEncoder(ffmpeg, "libsvtav1")) return "avif";
+  if (await hasEncoder(ffmpeg, "libwebp_anim")) return "webp";
+  return null;
+}
+
+// The clip's span, as Anki Miner chooses it: from the subtitle's start, as
+// long as clip_duration but never longer than the subtitle (0.5 s at
+// least); or, with match_audio (or a clip length of 0), the sentence
+// audio's padded span.
+function animatedSpan(options, line) {
+  const padStart = Number(options.audio_pad_start) || 0;
+  const padEnd = Number(options.audio_pad_end) || 0;
+  const configured = Number(options.screenshot_animated_clip_duration);
+  const duration = Math.max(0, line.end - line.start);
+  if (options.screenshot_animated_match_audio === true || configured === 0) {
+    const start = Math.max(0, line.start - padStart);
+    return { start, length: Math.max(line.end + padEnd - start, 0.5) };
+  }
+  return { start: line.start, length: Math.min(Number.isFinite(configured) && configured > 0 ? configured : 2, Math.max(duration, 0.5)) };
+}
+
+async function takeAnimated({ mpv, ffmpeg, options, base, tmp, line }) {
+  if (!ffmpeg) throw new Error("ffmpeg was not found; set ffmpeg_path in hachidori-mpv.conf");
+  if (!(Number.isFinite(line?.start) && Number.isFinite(line?.end))) throw new Error("the subtitle line has no timing");
+  const format = await animatedFormat(ffmpeg, options.screenshot_animated_format);
+  if (!format) throw new Error("this ffmpeg has neither libsvtav1 nor libwebp_anim");
+  const input = await mpv.get("path");
+  const { start, length } = animatedSpan(options, line);
+  const fps = Math.max(1, Math.round(Number(options.screenshot_animated_fps) || 20));
+  const height = Math.max(16, Math.round(Number(options.screenshot_animated_height) || 720));
+  const quality = Math.max(0, Math.min(100, Math.round(Number(options.screenshot_animated_quality) || 0)));
+  const out = path.join(tmp, `${base}.${format}`);
+  const args = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+    "-ss", start.toFixed(3), "-t", length.toFixed(3), "-i", input, "-an", "-sn", "-dn",
+    "-vf", `fps=${fps},scale=-2:'min(${height},ih)'`];
+  if (format === "avif") {
+    args.push("-c:v", "libsvtav1", "-crf", String(Math.round(63 - quality / 100 * 63)), "-pix_fmt", "yuv420p", "-loop", "0");
+  } else {
+    args.push("-c:v", "libwebp_anim", "-quality", String(quality), "-loop", "0");
+  }
+  args.push(out);
+  await run(ffmpeg, args, 180000);
+  return out;
+}
+
 async function cutAudio({ mpv, ffmpeg, options, base, tmp, line }) {
   if (!ffmpeg) throw new Error("ffmpeg was not found; set ffmpeg_path in hachidori-mpv.conf");
   if (!(Number.isFinite(line?.start) && Number.isFinite(line?.end) && line.end > line.start)) {
@@ -200,8 +259,14 @@ async function fillNoteMedia({ mpv, options, context, pid, log }) {
   try {
     if (pictureFields.length) {
       try {
-        const base = `${prefix}_${stamp(now)}`;
-        const name = await storeMedia(anki, await takeScreenshot({ mpv, ffmpeg, options, base, tmp }));
+        let file;
+        if (options.screenshot_animated === true) {
+          const base = `${prefix}_${stamp(lineStart)}-${stamp(context.line?.end ?? lineStart)}_anim`;
+          file = await takeAnimated({ mpv, ffmpeg, options, base, tmp, line: context.line });
+        } else {
+          file = await takeScreenshot({ mpv, ffmpeg, options, base: `${prefix}_${stamp(now)}`, tmp });
+        }
+        const name = await storeMedia(anki, file);
         for (const field of pictureFields) update[field] = `<img src="${name}">`;
       } catch (error) {
         warnings.push(`Screenshot: ${error.message}`);
@@ -225,4 +290,4 @@ async function fillNoteMedia({ mpv, options, context, pid, log }) {
   return { filled: Object.keys(update), warnings };
 }
 
-module.exports = { fillNoteMedia, targetFields, findFfmpeg, safeName, stamp };
+module.exports = { fillNoteMedia, targetFields, findFfmpeg, hasEncoder, animatedSpan, safeName, stamp };

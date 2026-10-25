@@ -9,7 +9,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { MpvIpc } = require("./mpv-ipc");
 const { WindowTracker } = require("./window-tracker");
-const { fillNoteMedia } = require("./anki-media");
+const { fillNoteMedia, findFfmpeg, hasEncoder } = require("./anki-media");
+const { formatConfValue, saveConf } = require("./conf-file");
 
 app.setName("hachidori-mpv");
 app.setPath("userData", path.join(app.getPath("appData"), "hachidori-mpv"));
@@ -41,6 +42,7 @@ let extension = null;
 let engineWindow = null;
 let bridgeWindow = null;
 let settingsWindow = null;
+let pluginSettingsWindow = null;
 let ready = null;
 const sessions = new Map(); // ipc path → OverlaySession
 
@@ -142,6 +144,61 @@ function openSettings() {
   settingsWindow.on("closed", () => { settingsWindow = null; });
 }
 
+function openPluginSettings() {
+  if (pluginSettingsWindow && !pluginSettingsWindow.isDestroyed()) {
+    pluginSettingsWindow.show();
+    pluginSettingsWindow.focus();
+    return;
+  }
+  pluginSettingsWindow = new BrowserWindow({ width: 1000, height: 760, minWidth: 720, minHeight: 480,
+    title: "hachidori-mpv settings", backgroundColor: "#1b1a22", autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, "plugin-settings-preload.js"), contextIsolation: true, nodeIntegration: false } });
+  pluginSettingsWindow.removeMenu();
+  pluginSettingsWindow.loadFile(path.join(__dirname, "plugin-settings.html"));
+  pluginSettingsWindow.on("closed", () => { pluginSettingsWindow = null; });
+}
+
+// The settings a window shows are those of the mpv that opened it; every
+// mpv reads the same script-opts file, so a change goes to all of them.
+function settingsSession() {
+  return [...sessions.values()].find(entry => !entry.closed) ?? null;
+}
+
+ipcMain.handle("hdmpv-settings:load", async () => {
+  const entry = settingsSession();
+  if (!entry) throw new Error("no mpv is attached");
+  const { defaults, userCss, ...options } = entry.options;
+  const ffmpeg = await findFfmpeg(options, entry.pid);
+  const encoders = ffmpeg
+    ? { avif: await hasEncoder(ffmpeg, "libsvtav1"), webp: await hasEncoder(ffmpeg, "libwebp_anim") }
+    : { avif: false, webp: false };
+  return { options, defaults, ffmpeg, encoders,
+    confPath: path.join(options.config_dir, "script-opts", "hachidori-mpv.conf") };
+});
+
+ipcMain.handle("hdmpv-settings:save", async (_event, changes) => {
+  const entry = settingsSession();
+  if (!entry) throw new Error("no mpv is attached");
+  const known = entry.options.defaults ?? {};
+  const accepted = {};
+  for (const [key, value] of Object.entries(changes ?? {})) {
+    if (!Object.hasOwn(known, key)) continue;
+    if (typeof known[key] === "boolean" && typeof value !== "boolean") continue;
+    if (typeof known[key] === "number" && !Number.isFinite(value)) continue;
+    if (typeof known[key] === "string" && typeof value !== "string") continue;
+    accepted[key] = value;
+  }
+  await saveConf(entry.options.config_dir, accepted);
+  for (const session of sessions.values()) {
+    for (const [key, value] of Object.entries(accepted)) {
+      await session.mpv.scriptMessage("hachidori-mpv-set", key, formatConfValue(value));
+    }
+  }
+  return true;
+});
+
+ipcMain.handle("hdmpv-settings:open-hachidori", () => openSettings());
+
 class OverlaySession {
   constructor(ipcPath) {
     this.ipcPath = ipcPath;
@@ -233,6 +290,7 @@ class OverlaySession {
     await observe("osd-dimensions", "osd");
     await observe("media-title", "title");
     await observe("fullscreen", "fullscreen");
+    await observe("user-data/hachidori-mpv/repeat", "repeat");
     await this.mpv.observe("mouse-pos", value => this.onMpvMouse(value));
 
     await this.mpv.scriptMessage("hachidori-mpv-attached");
@@ -262,6 +320,7 @@ class OverlaySession {
     if (args[0] !== "hachidori-mpv-overlay") return;
     if (args[1] === "detach") this.close();
     else if (args[1] === "settings") openSettings();
+    else if (args[1] === "plugin-settings") openPluginSettings();
     else if (args[1] === "reload") this.window?.webContents.reload();
   }
 

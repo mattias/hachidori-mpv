@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+<title>hachidori-mpv settings</title>
+<link rel="stylesheet" href="plugin-settings.css">
+</head>
+<body>
+<aside>
+  <div class="brand">
+    <strong>hachidori-mpv</strong>
+    <span>Plugin settings</span>
+  </div>
+  <nav id="nav"></nav>
+  <button type="button" id="open-hachidori" class="link">Hachidori settings…</button>
+  <p class="hint">Dictionaries, the popup and your Anki Templates come from your shared Hachidori.</p>
+</aside>
+<main>
+  <div id="sections"></div>
+  <footer>
+    <span id="status" role="status" aria-live="polite"></span>
+    <span id="conf-path"></span>
+  </footer>
+</main>
+<script src="plugin-settings.js"></script>
+</body>
+</html>

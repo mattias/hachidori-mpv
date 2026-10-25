@@ -4,7 +4,8 @@
 -- This script owns the mpv side: it opens a JSON IPC socket, starts the
 -- overlay (an Electron app that runs the real Hachidori extension, linked to
 -- the Hachidori in your browser through Sharing), hides mpv's own primary
--- subtitles while the overlay draws them, and gives you key bindings.
+-- subtitles while the overlay draws them, and gives you key bindings:
+-- subtitle navigation and line repeat while the overlay is on.
 
 local mp = require "mp"
 local msg = require "mp.msg"
@@ -20,6 +21,10 @@ local opts = {
     pause_on_hover = true,
     -- Link to the sharing Hachidori on this computer the first time.
     auto_link = true,
+    -- Keys while the overlay is on. Empty turns one off.
+    key_prev_sub = "LEFT",
+    key_next_sub = "RIGHT",
+    key_repeat = "r",
     -- Subtitle appearance in the overlay. Sizes are percentages of the
     -- video window's height.
     font_family = "Noto Sans CJK JP, Noto Sans JP, Yu Gothic UI, Meiryo, Hiragino Sans, sans-serif",
@@ -35,9 +40,20 @@ local opts = {
     -- fills the {screenshot}/{gif} and {sentence-audio} fields it cannot.
     fill_screenshot = true,
     fill_sentence_audio = true,
+    -- The still picture: the frame on screen when you mine.
     screenshot_format = "webp",
     screenshot_height = 480,
     screenshot_quality = 80,
+    -- An animated picture instead, as Anki Miner makes it: a clip from the
+    -- subtitle's start, at most the subtitle long (0 = the sentence audio's
+    -- span, as screenshot_animated_match_audio).
+    screenshot_animated = false,
+    screenshot_animated_format = "avif",
+    screenshot_animated_clip_duration = 2.0,
+    screenshot_animated_match_audio = false,
+    screenshot_animated_fps = 20,
+    screenshot_animated_height = 720,
+    screenshot_animated_quality = 30,
     audio_format = "opus",
     audio_bitrate = "64k",
     audio_pad_start = 0.15,
@@ -59,7 +75,8 @@ local opts = {
     -- Show the overlay's developer tools (for debugging).
     debug = false,
 }
-options.read_options(opts, "hachidori-mpv", function() publish_options() end)
+local defaults = {}
+for key, value in pairs(opts) do defaults[key] = value end
 
 local script_dir = mp.get_script_directory()
 local overlay_dir = utils.join_path(script_dir, "overlay")
@@ -71,6 +88,10 @@ local state = {
     last_heartbeat = 0,
     saved_sub_visibility = nil,
     disabled = false,      -- the user turned the overlay off for this mpv
+    keys_bound = false,
+    repeat_line = nil,     -- {start, stop} while a line repeats
+    pending_repeat = false,
+    last_line = nil,       -- the last subtitle line seen, for repeat between lines
 }
 
 local function osd(text, seconds)
@@ -107,12 +128,13 @@ local function ipc_path()
 end
 
 -- The overlay reads its settings from this property when it attaches and
--- again whenever it changes, so script-opts edits apply without a restart.
-function publish_options()
+-- again whenever it changes, so edits apply without a restart.
+local function publish_options()
     local copy = {}
     for key, value in pairs(opts) do copy[key] = value end
     copy.script_dir = script_dir
     copy.config_dir = mp.command_native({"expand-path", "~~/"})
+    copy.defaults = defaults
     mp.set_property("user-data/hachidori-mpv/options", utils.format_json(copy))
 end
 
@@ -126,6 +148,120 @@ local function restore_subs()
     if state.saved_sub_visibility == nil then return end
     mp.set_property_bool("sub-visibility", state.saved_sub_visibility)
     state.saved_sub_visibility = nil
+end
+
+-- Repeat: mpv's own A-B loop over the line, padded like the sentence audio.
+
+local function publish_repeat()
+    mp.set_property("user-data/hachidori-mpv/repeat", state.repeat_line and "yes" or "no")
+end
+
+local function current_line()
+    local start = mp.get_property_number("sub-start")
+    local stop = mp.get_property_number("sub-end")
+    if start and stop and stop > start then return {start = start, stop = stop} end
+    return nil
+end
+
+local function loop_line(line, seek)
+    local a = math.max(0, line.start - (tonumber(opts.audio_pad_start) or 0))
+    local b = line.stop + (tonumber(opts.audio_pad_end) or 0)
+    state.repeat_line = line
+    mp.set_property_number("ab-loop-a", a)
+    mp.set_property_number("ab-loop-b", b)
+    if seek then mp.commandv("seek", tostring(a), "absolute+exact") end
+    publish_repeat()
+end
+
+local function stop_repeat(quiet)
+    if not state.repeat_line and not state.pending_repeat then return end
+    state.repeat_line = nil
+    state.pending_repeat = false
+    mp.set_property("ab-loop-a", "no")
+    mp.set_property("ab-loop-b", "no")
+    publish_repeat()
+    if not quiet then osd("repeat off", 1.5) end
+end
+
+local function toggle_repeat()
+    if state.repeat_line then
+        stop_repeat(false)
+        return
+    end
+    local line = current_line() or state.last_line
+    if not line then
+        osd("no subtitle line to repeat", 2)
+        return
+    end
+    loop_line(line, true)
+    osd("repeat on", 1.5)
+end
+
+-- Previous/next subtitle. A repeating line moves with you: the loop is
+-- cleared before the seek, so mpv does not jump back, and set again on the
+-- new line once playback restarts there.
+local function sub_step(direction)
+    if not has_subtitle_track() then
+        mp.commandv("seek", tostring(5 * direction))
+        return
+    end
+    if state.repeat_line then
+        state.repeat_line = nil
+        state.pending_repeat = true
+        mp.set_property("ab-loop-a", "no")
+        mp.set_property("ab-loop-b", "no")
+    end
+    mp.commandv("no-osd", "sub-seek", tostring(direction))
+end
+
+mp.register_event("playback-restart", function()
+    if not state.pending_repeat then return end
+    state.pending_repeat = false
+    local line = current_line()
+    if line then loop_line(line, false) else publish_repeat() end
+end)
+
+function has_subtitle_track()
+    for _, track in ipairs(mp.get_property_native("track-list", {})) do
+        if track.type == "sub" then return true end
+    end
+    return false
+end
+
+local function bind_keys()
+    if state.keys_bound then return end
+    state.keys_bound = true
+    local function bind(key, name, fn)
+        if key and key ~= "" then mp.add_forced_key_binding(key, name, fn, {repeatable = true}) end
+    end
+    bind(opts.key_prev_sub, "hachidori-mpv-prev-sub", function() sub_step(-1) end)
+    bind(opts.key_next_sub, "hachidori-mpv-next-sub", function() sub_step(1) end)
+    if opts.key_repeat ~= "" then mp.add_forced_key_binding(opts.key_repeat, "hachidori-mpv-repeat", toggle_repeat) end
+end
+
+local function unbind_keys()
+    if not state.keys_bound then return end
+    state.keys_bound = false
+    for _, name in ipairs({"hachidori-mpv-prev-sub", "hachidori-mpv-next-sub", "hachidori-mpv-repeat"}) do
+        mp.remove_key_binding(name)
+    end
+end
+
+local function rebind_keys()
+    if not state.keys_bound then return end
+    unbind_keys()
+    bind_keys()
+end
+
+local function on_overlay_running()
+    hide_subs()
+    bind_keys()
+end
+
+local function on_overlay_stopped()
+    restore_subs()
+    unbind_keys()
+    stop_repeat(true)
 end
 
 local function start_overlay()
@@ -164,16 +300,14 @@ local function stop_overlay()
     mp.commandv("script-message", "hachidori-mpv-overlay", "detach")
     state.running = false
     state.starting = false
-    restore_subs()
+    on_overlay_stopped()
     osd("off")
 end
 
-local function has_subtitle_track()
-    for _, track in ipairs(mp.get_property_native("track-list", {})) do
-        if track.type == "sub" then return true end
-    end
-    return false
-end
+options.read_options(opts, "hachidori-mpv", function()
+    publish_options()
+    rebind_keys()
+end)
 
 -- Messages from the overlay.
 mp.register_script_message("hachidori-mpv-attached", function()
@@ -185,7 +319,7 @@ mp.register_script_message("hachidori-mpv-attached", function()
         mp.commandv("script-message", "hachidori-mpv-overlay", "detach")
         return
     end
-    hide_subs()
+    on_overlay_running()
     if first then osd("ready", 1.5) end
 end)
 
@@ -194,30 +328,60 @@ mp.register_script_message("hachidori-mpv-heartbeat", function()
     if not state.running and not state.disabled then
         state.running = true
         state.starting = false
-        hide_subs()
+        on_overlay_running()
     end
 end)
 
 mp.register_script_message("hachidori-mpv-detached", function()
     state.running = false
-    restore_subs()
+    on_overlay_stopped()
 end)
 
 mp.register_script_message("hachidori-mpv-osd", function(text, seconds)
     osd(text, tonumber(seconds) or 3)
 end)
 
+-- A setting changed in the plugin's Settings window (already saved to
+-- script-opts/hachidori-mpv.conf): apply it now.
+mp.register_script_message("hachidori-mpv-set", function(key, value)
+    if opts[key] == nil then return end
+    local kind = type(defaults[key])
+    if kind == "boolean" then
+        opts[key] = value == "yes" or value == "true"
+    elseif kind == "number" then
+        opts[key] = tonumber(value) or defaults[key]
+    else
+        opts[key] = value
+    end
+    if key == "hide_mpv_subs" and state.running then
+        if opts.hide_mpv_subs then hide_subs() else restore_subs() end
+    end
+    if key:sub(1, 4) == "key_" then rebind_keys() end
+    publish_options()
+end)
+
+mp.register_script_message("hachidori-mpv-publish", function()
+    publish_options()
+end)
+
 -- A crashed or closed overlay sends no more heartbeats; bring mpv's own
--- subtitles back so nothing is lost.
+-- subtitles and keys back so nothing is lost.
 mp.add_periodic_timer(2, function()
     if state.running and mp.get_time() - state.last_heartbeat > 6 then
         msg.warn("overlay stopped responding")
         state.running = false
-        restore_subs()
+        on_overlay_stopped()
     end
 end)
 
+mp.observe_property("sub-end", "number", function()
+    local line = current_line()
+    if line then state.last_line = line end
+end)
+
 mp.register_event("file-loaded", function()
+    stop_repeat(true)
+    state.last_line = nil
     if opts.autostart and not state.disabled and not state.running and has_subtitle_track() then
         start_overlay()
     end
@@ -231,17 +395,23 @@ mp.add_key_binding("alt+h", "toggle", function()
     if state.running or state.starting then stop_overlay() else start_overlay() end
 end)
 
-mp.add_key_binding("alt+H", "settings", function()
-    if not state.running then
-        start_overlay()
-        osd("starting… press again to open Settings once it is ready")
-        return
+local function overlay_command(command)
+    return function()
+        if not state.running then
+            start_overlay()
+            osd("starting… press again once it is ready")
+            return
+        end
+        mp.commandv("script-message", "hachidori-mpv-overlay", command)
     end
-    mp.commandv("script-message", "hachidori-mpv-overlay", "settings")
-end)
+end
 
+mp.add_key_binding("alt+H", "settings", overlay_command("settings"))
+mp.add_key_binding("alt+o", "plugin-settings", overlay_command("plugin-settings"))
+mp.add_key_binding(nil, "repeat", toggle_repeat)
 mp.add_key_binding(nil, "reload", function()
     mp.commandv("script-message", "hachidori-mpv-overlay", "reload")
 end)
 
 publish_options()
+publish_repeat()
