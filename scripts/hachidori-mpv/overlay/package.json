@@ -1,0 +1,21 @@
+{
+  "name": "hachidori-mpv",
+  "productName": "hachidori-mpv",
+  "version": "0.1.0",
+  "description": "Hachidori lookups and Anki mining on mpv subtitles",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "prepare-hachidori": "node prepare-hachidori.mjs",
+    "test": "node --test test/"
+  },
+  "hachidori": {
+    "fallbackRelease": "0.3.1"
+  },
+  "dependencies": {
+    "electron": "43.8.3",
+    "extract-zip": "2.0.1",
+    "koffi": "3.3.4"
+  }
+}

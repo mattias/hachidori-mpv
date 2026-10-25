@@ -1,0 +1,64 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+:root {
+  --sub-font-family: "Noto Sans CJK JP", "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
+  --sub-font-size: 40px;
+  --sub-font-weight: 600;
+  --sub-color: #ffffff;
+  --sub-outline-color: #000000;
+  --sub-outline: 3px;
+  --sub-background: transparent;
+  --sub-bottom: 40px;
+  --sub-max-width: 90%;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+#subtitle {
+  position: absolute;
+  left: 50%;
+  bottom: var(--sub-bottom);
+  transform: translateX(-50%);
+  max-width: var(--sub-max-width);
+  width: max-content;
+  pointer-events: auto;
+  padding: 0.08em 0.3em;
+  border-radius: 0.15em;
+  background: var(--sub-background);
+  color: var(--sub-color);
+  font-family: var(--sub-font-family);
+  font-size: var(--sub-font-size);
+  font-weight: var(--sub-font-weight);
+  line-height: 1.3;
+  text-align: center;
+  -webkit-text-stroke: var(--sub-outline) var(--sub-outline-color);
+  paint-order: stroke fill;
+  text-shadow: 0 0 0.12em rgba(0, 0, 0, 0.6);
+  cursor: default;
+}
+
+#subtitle[hidden] {
+  display: none;
+}
+
+#subtitle .line {
+  white-space: pre-wrap;
+}
+
+/* A line break that is not page text, so the lines stay one sentence. */
+#subtitle .line + .line::before {
+  content: "\A";
+  white-space: pre;
+}
