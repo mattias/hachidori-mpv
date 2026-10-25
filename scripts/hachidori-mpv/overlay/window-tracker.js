@@ -85,8 +85,11 @@ function createX11() {
   };
 }
 
+// koffi types are process-wide: one user32 binding serves every mpv window.
+let win32 = null;
+
 function createPlatform() {
-  if (process.platform === "win32") return createWin32();
+  if (process.platform === "win32") return (win32 ??= createWin32());
   if (process.platform === "linux" && !process.env.WAYLAND_DISPLAY) return createX11();
   if (process.platform === "linux") {
     // XWayland windows still answer xwininfo when mpv runs with an X11 context.

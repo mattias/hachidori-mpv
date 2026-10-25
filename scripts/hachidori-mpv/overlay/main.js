@@ -13,7 +13,7 @@ const { fillNoteMedia, findFfmpeg, hasEncoder } = require("./anki-media");
 const { formatConfValue, saveConf } = require("./conf-file");
 
 app.setName("hachidori-mpv");
-app.setPath("userData", path.join(app.getPath("appData"), "hachidori-mpv"));
+app.setPath("userData", process.env.HACHIDORI_MPV_USER_DATA || path.join(app.getPath("appData"), "hachidori-mpv"));
 // Hachidori's popup audio should play without a click first.
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 if (process.env.HACHIDORI_MPV_DEBUG_PORT) {
@@ -24,7 +24,20 @@ const EXTENSION_DIR = path.join(__dirname, "hachidori");
 const DEBUG = process.argv.includes("--hachidori-debug");
 const HEARTBEAT_MS = 2000;
 
-const log = (...args) => console.log("[hachidori-mpv]", ...args);
+// The overlay runs detached from mpv, so its output goes to overlay.log in
+// its data folder as well: the file to send with a bug report.
+const LOG_FILE = path.join(app.getPath("userData"), "overlay.log");
+try {
+  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+  if (fs.statSync(LOG_FILE, { throwIfNoEntry: false })?.size > 1024 * 1024) fs.renameSync(LOG_FILE, `${LOG_FILE}.old`);
+} catch {}
+const log = (...args) => {
+  console.log("[hachidori-mpv]", ...args);
+  const text = args.map(arg => (arg instanceof Error ? arg.stack : typeof arg === "string" ? arg : JSON.stringify(arg))).join(" ");
+  try { fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} [${process.pid}] ${text}\n`); } catch {}
+};
+process.on("uncaughtException", error => log("uncaught:", error));
+process.on("unhandledRejection", error => log("unhandled rejection:", error));
 const argValue = (argv, name) => {
   const prefix = `--${name}=`;
   const entry = argv.find(value => typeof value === "string" && value.startsWith(prefix));
@@ -32,8 +45,10 @@ const argValue = (argv, name) => {
 };
 
 const firstIpc = argValue(process.argv, "mpv-ipc");
+log(`start: ${process.platform} ${process.arch}, Electron ${process.versions.electron}, mpv ${firstIpc}`);
 if (!app.requestSingleInstanceLock({ ipc: firstIpc })) {
   // Another overlay process already runs; it attaches to this mpv instead.
+  log("another overlay process runs; handing this mpv to it");
   app.quit();
   process.exit(0);
 }

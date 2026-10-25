@@ -152,6 +152,16 @@ CSS in `script-opts/hachidori-mpv.css`, for example:
   written but not yet tested. Wayland without XWayland cannot place a window
   over another; macOS is not supported yet.
 
+## Troubleshooting
+
+The overlay writes what it does to `overlay.log` in its data folder:
+
+- Windows: `%APPDATA%\hachidori-mpv\overlay.log`
+- Linux: `~/.config/hachidori-mpv/overlay.log`
+
+Please attach it to a bug report, together with your OS, mpv version and
+whether mpv was windowed or fullscreen.
+
 ## Development
 
 ```bash
