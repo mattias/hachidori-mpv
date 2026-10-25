@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("hdmpv", {
   lookupLine: line => ipcRenderer.send("hdmpv:lookup-line", line),
   note: detail => ipcRenderer.send("hdmpv:note", detail),
   focusMpv: () => ipcRenderer.send("hdmpv:focus-mpv"),
+  log: text => ipcRenderer.send("hdmpv:log", String(text)),
 });
 
 // Overlay-mode link buttons ask the embedding host to open their URL.

@@ -4,7 +4,7 @@
 // over each mpv that asks for it. One process serves every mpv instance.
 "use strict";
 
-const { app, BrowserWindow, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, powerMonitor, screen, session, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { MpvIpc } = require("./mpv-ipc");
@@ -259,6 +259,10 @@ class OverlaySession {
       return { action: "deny" };
     });
     if (DEBUG) this.window.webContents.openDevTools({ mode: "detach" });
+    const contents = this.window.webContents;
+    contents.on("render-process-gone", (_event, details) => log(`overlay page gone: ${details.reason}`));
+    contents.on("unresponsive", () => log("overlay page unresponsive"));
+    contents.on("responsive", () => log("overlay page responsive again"));
     // A (re)loaded page starts empty: give it everything it draws from.
     this.window.webContents.on("did-finish-load", () => {
       this.interactive = true;
@@ -278,10 +282,21 @@ class OverlaySession {
       onBounds: (dip, physical) => {
         this.window.setBounds(dip);
         this.physical = physical;
-        if (!this.window.isVisible()) this.window.showInactive();
+        // Windows hides an owned window with its owner and shows it again by
+        // itself when mpv is restored, so isVisible() is already true then;
+        // Chromium still thinks the window is hidden and draws nothing until
+        // it is shown through Electron.
+        if (this.hiddenByTracker || !this.window.isVisible()) {
+          if (this.hiddenByTracker) log("mpv is visible again; showing the overlay");
+          this.hiddenByTracker = false;
+          this.window.showInactive();
+        }
         this.send("hdmpv:layout", { width: dip.width, height: dip.height });
       },
-      onHidden: () => this.window.hide(),
+      onHidden: () => {
+        this.hiddenByTracker = true;
+        this.window.hide();
+      },
       onGone: () => this.close(),
     });
     if (!this.tracker.start()) {
@@ -350,6 +365,18 @@ class OverlaySession {
     this.send("hdmpv:pointer", { x: value.x * scaleX, y: value.y * scaleY, hover: value.hover });
   }
 
+  // A window Chromium believes hidden puts nothing on screen while its page
+  // keeps working: subtitles and popups are drawn but never shown. Showing
+  // it through Electron again is what brings it back (invalidating or
+  // resizing does not), so do that after sleep, a locked screen or a display
+  // change, when Windows may have hidden and shown it behind Electron's back.
+  repaint(reason) {
+    if (!this.window || this.window.isDestroyed() || !this.window.isVisible() || this.hiddenByTracker) return;
+    log(`showing the overlay again: ${reason}`);
+    this.window.hide();
+    this.window.showInactive();
+  }
+
   setInteractive(on) {
     if (!this.window || this.window.isDestroyed() || on === this.interactive) return;
     this.interactive = on;
@@ -414,6 +441,14 @@ ipcMain.on("hdmpv:lookup-line", (event, line) => {
 });
 ipcMain.on("hdmpv:note", (event, detail) => { void sessionFor(event.sender)?.noteAdded(detail); });
 ipcMain.on("hdmpv:focus-mpv", event => sessionFor(event.sender)?.tracker?.focusMpv());
+ipcMain.on("hdmpv:log", (event, text) => {
+  const entry = sessionFor(event.sender);
+  if (entry && typeof text === "string") log(`overlay ${entry.ipcPath}: ${text.slice(0, 300)}`);
+});
+
+function repaintAll(reason) {
+  for (const entry of sessions.values()) entry.repaint(reason);
+}
 ipcMain.handle("hdmpv:open-external", (_event, url) => {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("only web links open");
@@ -459,6 +494,16 @@ app.whenReady().then(async () => {
     mpv.close();
     app.quit();
     return;
+  }
+  app.on("child-process-gone", (_event, details) => {
+    log(`${details.type} process gone: ${details.reason}`);
+    if (details.type === "GPU") setTimeout(() => repaintAll("GPU process restarted"), 1000);
+  });
+  for (const event of ["resume", "unlock-screen"]) {
+    powerMonitor.on?.(event, () => setTimeout(() => repaintAll(event), 1000));
+  }
+  for (const event of ["display-added", "display-removed", "display-metrics-changed"]) {
+    screen.on(event, () => setTimeout(() => repaintAll(event), 1000));
   }
   if (firstIpc) await attach(firstIpc);
   else if (process.argv.includes("--settings")) openSettings();

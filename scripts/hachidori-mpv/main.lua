@@ -138,8 +138,14 @@ local function publish_options()
     mp.set_property("user-data/hachidori-mpv/options", utils.format_json(copy))
 end
 
-local function hide_subs()
-    if not opts.hide_mpv_subs or state.saved_sub_visibility ~= nil then return end
+-- force: the overlay (re)attached, so mpv's subtitles go away again even if
+-- they were turned back on (with v) in the meantime.
+local function hide_subs(force)
+    if not opts.hide_mpv_subs then return end
+    if state.saved_sub_visibility ~= nil then
+        if force then mp.set_property_bool("sub-visibility", false) end
+        return
+    end
     state.saved_sub_visibility = mp.get_property_bool("sub-visibility", true)
     mp.set_property_bool("sub-visibility", false)
 end
@@ -253,8 +259,8 @@ local function rebind_keys()
     bind_keys()
 end
 
-local function on_overlay_running()
-    hide_subs()
+local function on_overlay_running(attached)
+    hide_subs(attached)
     bind_keys()
 end
 
@@ -319,7 +325,7 @@ mp.register_script_message("hachidori-mpv-attached", function()
         mp.commandv("script-message", "hachidori-mpv-overlay", "detach")
         return
     end
-    on_overlay_running()
+    on_overlay_running(true)
     if first then osd("ready", 1.5) end
 end)
 

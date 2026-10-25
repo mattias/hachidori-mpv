@@ -80,6 +80,9 @@
   document.addEventListener("mouseleave", () => update(null, null));
   window.addEventListener("blur", () => { if (!popupShown) update(null, null); });
 
+  // A hidden page draws nothing; say so in overlay.log when it happens.
+  document.addEventListener("visibilitychange", () => window.hdmpv.log(`page ${document.visibilityState}`));
+
   window.addEventListener("hachidori-popup-shown", () => {
     popupShown = true;
     window.hdmpv.lookupLine(currentLine());
