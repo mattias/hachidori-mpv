@@ -23,19 +23,52 @@ const REPOSITORY = "bee-san/hachidori";
 // so its storage and link survive updates.
 const MANIFEST_KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyRezfLZ2aoa4tEHI5ZmPsgIMxsLTvyD2hPdEzb0zKstB4CDIsLnx/LOOHKM7b6kY9EkEF5mvpCzWG3XCGujLuxKlptf5aeKzqpuk0DWarqtfIrdq0rEKpbv0zGCPA3PwhITgphafSjTcWz167bQKAcb1vkBarn6gEto4AeLiSqpQDumjIYMWO/JJdT7GVnru7s4OtmEWRi3rxb9AYv4x1MT5cLPoB/7m/glZLt567cWrUPfJRzTa9KCGYuFhw9At94apJg4pK3jgrMNZM2zxtsH6hjpMPZitjcvHDCHxEr0I8XtS2KlbgY12WzRww3BHzM/udD46ODt+vxvUXOLhewIDAQAB";
 
+// Each hook's edits apply together. A required hook missing from a release
+// stops the install; an optional one is skipped with a warning.
 const HOOKS = [
   {
     file: "overlay-mode.js",
-    find: "export const OVERLAY_MODE = false;",
-    replace: "export const OVERLAY_MODE = true;",
+    edits: [{
+      find: "export const OVERLAY_MODE = false;",
+      replace: "export const OVERLAY_MODE = true;",
+    }],
   },
   {
     // A confirmed add or update: tell the overlay page which note it was.
     file: "anki-content.js",
-    find: "      record.noteIds = [result.noteId];\n",
-    replace: "      record.noteIds = [result.noteId];\n"
-      + "      window.dispatchEvent(new CustomEvent(\"hachidori-mpv-note\", { detail: JSON.stringify({ noteId: result.noteId,\n"
-      + "        state: result.state, templateId: record.templateId ?? null }) }));\n",
+    edits: [{
+      find: "      record.noteIds = [result.noteId];\n",
+      replace: "      record.noteIds = [result.noteId];\n"
+        + "      window.dispatchEvent(new CustomEvent(\"hachidori-mpv-note\", { detail: JSON.stringify({ noteId: result.noteId,\n"
+        + "        state: result.state, templateId: record.templateId ?? null }) }));\n",
+    }],
+  },
+  {
+    // A root popup above a subtitle line overlaps that line's top by the gap
+    // the overlay page sets (data-hdmpv-popup-gap), so it covers the line
+    // above instead of leaving a strip of it between the word and the popup.
+    file: "content.js",
+    optional: "the popup keeps Hachidori's own distance from the subtitle",
+    edits: [
+      {
+        find: "  function calculatePopupPosition(anchorRect, viewport, vertical, preferBelow = false) {\n"
+          + "    return window.HDPopup.calculatePopupPosition(",
+        replace: "  function calculatePopupPosition(anchorRect, viewport, vertical, preferBelow = false) {\n"
+          + "    const hdmpvGap = Number(document.documentElement.dataset.hdmpvPopupGap);\n"
+          + "    if (!vertical && !preferBelow && Number.isFinite(hdmpvGap)) {\n"
+          + "      const placed = hdmpvPopupPosition(anchorRect, viewport, vertical, preferBelow, hdmpvGap);\n"
+          + "      if (placed.placement === \"above\") return placed;\n"
+          + "    }\n"
+          + "    return hdmpvPopupPosition(anchorRect, viewport, vertical, preferBelow, POPUP_GAP_PX);\n"
+          + "  }\n"
+          + "  function hdmpvPopupPosition(anchorRect, viewport, vertical, preferBelow, gap) {\n"
+          + "    return window.HDPopup.calculatePopupPosition(",
+      },
+      {
+        find: "}, viewport, { gap: POPUP_GAP_PX, padding: POPUP_PADDING_PX, vertical, preferBelow });",
+        replace: "}, viewport, { gap, padding: POPUP_PADDING_PX, vertical, preferBelow });",
+      },
+    ],
   },
 ];
 
@@ -100,13 +133,17 @@ async function exists(file) {
 async function patch(dir) {
   for (const hook of HOOKS) {
     const file = path.join(dir, hook.file);
-    const text = await fs.readFile(file, "utf8");
-    const normalised = text.replaceAll("\r\n", "\n");
-    if (normalised.includes(hook.replace)) continue;
-    if (!normalised.includes(hook.find)) {
+    let text = (await fs.readFile(file, "utf8")).replaceAll("\r\n", "\n");
+    const pending = hook.edits.filter(edit => !text.includes(edit.replace));
+    if (pending.some(edit => !text.includes(edit.find))) {
+      if (hook.optional) {
+        console.warn(`Warning: ${hook.file} has changed, so ${hook.optional}.`);
+        continue;
+      }
       throw new Error(`${hook.file} has changed: this Hachidori release needs an updated hachidori-mpv.`);
     }
-    await fs.writeFile(file, normalised.replace(hook.find, hook.replace));
+    for (const edit of pending) text = text.replace(edit.find, edit.replace);
+    await fs.writeFile(file, text);
   }
   const manifestFile = path.join(dir, "manifest.json");
   const manifest = JSON.parse(await fs.readFile(manifestFile, "utf8"));
@@ -142,6 +179,7 @@ async function main() {
         "overlay-mode.js enables overlay mode.",
         "manifest.json carries a fixed key so the extension keeps one ID.",
         "anki-content.js dispatches hachidori-mpv-note after a confirmed note write.",
+        "content.js lets a root popup overlap its subtitle line by the overlay page's data-hdmpv-popup-gap.",
         "mpv/ holds the hachidori-mpv engine host and bridge pages.",
       ],
       preparedAt: new Date().toISOString(),

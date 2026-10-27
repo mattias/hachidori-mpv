@@ -31,6 +31,7 @@
     if (options.background_color) root.style.setProperty("--sub-background", options.background_color);
     if (options.max_width) root.style.setProperty("--sub-max-width", `${options.max_width}%`);
     userCss.textContent = options.userCss || "";
+    updatePopupGap();
   }
 
   // Only a changed line replaces the text, so an open popup keeps its source.
@@ -48,7 +49,27 @@
       return span;
     }));
     subtitle.hidden = text === "";
+    updatePopupGap();
     if (pointer) update(pointer.x, pointer.y);
+  }
+
+  // How far a popup above a line may reach down into the line's own box
+  // (data-hdmpv-popup-gap, read by the patched Hachidori): past the part
+  // the line above overlaps, so no strip of that line is left between the
+  // word and the popup, but not as far as the glyphs themselves.
+  function updatePopupGap() {
+    const line = subtitle.querySelector(".line");
+    if (!line) return;
+    const range = document.createRange();
+    range.selectNodeContents(line);
+    const box = range.getBoundingClientRect();
+    const style = getComputedStyle(subtitle);
+    const fontSize = parseFloat(style.fontSize);
+    const lineHeight = parseFloat(style.lineHeight);
+    if (!(box.height > 0 && fontSize > 0 && lineHeight > 0)) return;
+    const overlap = Math.max(0, box.height - lineHeight);
+    const aboveGlyphs = (box.height - fontSize) / 2;
+    root.dataset.hdmpvPopupGap = String(-Math.round(Math.max(0, Math.min(overlap + 2, aboveGlyphs - 1))));
   }
 
   function currentLine() {
