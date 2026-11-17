@@ -11,7 +11,7 @@
     "test": "node --test test/"
   },
   "hachidori": {
-    "fallbackRelease": "0.3.1"
+    "fallbackRelease": "0.5.2"
   },
   "dependencies": {
     "electron": "43.8.3",

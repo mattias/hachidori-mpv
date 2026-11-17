@@ -125,6 +125,25 @@ function bridge(call) {
   return bridgeWindow.webContents.executeJavaScript(`globalThis.hachidoriMpv.${call}`);
 }
 
+// The overlay's Hachidori is a copy made at install time; the browser's
+// updates by itself. Say so when they differ, once per overlay process.
+let versionChecked = false;
+async function checkHachidoriVersion(relayUrl, notify) {
+  if (versionChecked || !relayUrl) return;
+  versionChecked = true;
+  try {
+    const ours = JSON.parse(fs.readFileSync(path.join(EXTENSION_DIR, "SOURCE.json"), "utf8")).version;
+    const response = await fetch(`${relayUrl.replace(/\/$/, "")}/yomitanVersion`, {
+      method: "POST", body: "{}", signal: AbortSignal.timeout(4000) });
+    const { version } = await response.json();
+    if (typeof version !== "string" || !version || version === ours) return;
+    log(`the browser runs Hachidori ${version}, the overlay ${ours}`);
+    notify(`your browser runs Hachidori ${version} but the overlay has ${ours}. Run install.ps1 / install.sh again to update it.`, 8);
+  } catch {
+    // No relay or an older one: nothing to compare against.
+  }
+}
+
 async function ensureLinked(notify) {
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
@@ -326,6 +345,7 @@ class OverlaySession {
     await this.mpv.scriptMessage("hachidori-mpv-attached");
     this.heartbeat = setInterval(() => { void this.mpv.scriptMessage("hachidori-mpv-heartbeat"); }, HEARTBEAT_MS);
     if (this.options.auto_link !== false) void ensureLinked((text, seconds) => this.notify(text, seconds));
+    void checkHachidoriVersion(this.options.relay_api_url, (text, seconds) => this.notify(text, seconds));
     log(`attached to mpv at ${this.ipcPath}`);
   }
 

@@ -51,8 +51,7 @@ const HOOKS = [
     optional: "the popup keeps Hachidori's own distance from the subtitle",
     edits: [
       {
-        find: "  function calculatePopupPosition(anchorRect, viewport, vertical, preferBelow = false) {\n"
-          + "    return window.HDPopup.calculatePopupPosition(",
+        find: "  function calculatePopupPosition(anchorRect, viewport, vertical, preferBelow = false) {\n",
         replace: "  function calculatePopupPosition(anchorRect, viewport, vertical, preferBelow = false) {\n"
           + "    const hdmpvGap = Number(document.documentElement.dataset.hdmpvPopupGap);\n"
           + "    if (!vertical && !preferBelow && Number.isFinite(hdmpvGap)) {\n"
@@ -61,8 +60,7 @@ const HOOKS = [
           + "    }\n"
           + "    return hdmpvPopupPosition(anchorRect, viewport, vertical, preferBelow, POPUP_GAP_PX);\n"
           + "  }\n"
-          + "  function hdmpvPopupPosition(anchorRect, viewport, vertical, preferBelow, gap) {\n"
-          + "    return window.HDPopup.calculatePopupPosition(",
+          + "  function hdmpvPopupPosition(anchorRect, viewport, vertical, preferBelow, gap) {\n",
       },
       {
         find: "}, viewport, { gap: POPUP_GAP_PX, padding: POPUP_PADDING_PX, vertical, preferBelow });",
