@@ -86,23 +86,66 @@ async function hostVersion() {
   }
 }
 
-async function github(url) {
-  const headers = { "User-Agent": "hachidori-mpv", Accept: "application/vnd.github+json" };
-  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  const response = await fetch(url, { headers });
+async function download(url) {
+  const response = await fetch(url, { headers: { "User-Agent": "hachidori-mpv" } });
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   return response;
 }
 
+// The commit a release tag names, read from the repository's git refs over
+// plain HTTPS. That is not GitHub's REST API, so its 60-requests-an-hour
+// limit for unauthenticated callers does not apply.
+async function tagCommit(tag) {
+  const text = await (await download(`https://github.com/${REPOSITORY}.git/info/refs?service=git-upload-pack`)).text();
+  const refs = new Map();
+  for (const line of text.split("\n")) {
+    const match = line.match(/([0-9a-f]{40}) (refs\/tags\/\S+)/);
+    if (match) refs.set(match[2], match[1]);
+  }
+  // An annotated tag's commit is its peeled ^{} entry.
+  return refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`) ?? null;
+}
+
+// The release's Chrome zip and checksum file. Hachidori names them after the
+// tag's commit (hachidori-0.5.2-6cd6124abaa1-chrome.zip), so they are found
+// without the REST API; the API, with GITHUB_TOKEN when set, is the fallback.
+async function releaseAssets(tag) {
+  const base = `https://github.com/${REPOSITORY}/releases/download/${encodeURIComponent(tag)}`;
+  try {
+    const commit = await tagCommit(tag);
+    if (commit) {
+      const stem = `hachidori-${tag}-${commit.slice(0, 12)}`;
+      const zip = { name: `${stem}-chrome.zip`, url: `${base}/${stem}-chrome.zip` };
+      const probe = await fetch(zip.url, { method: "HEAD", headers: { "User-Agent": "hachidori-mpv" } });
+      if (probe.ok) return { zip, sums: { name: `${stem}-SHA256SUMS.txt`, url: `${base}/${stem}-SHA256SUMS.txt` } };
+    }
+  } catch {
+    // Fall through to the API.
+  }
+  const headers = { "User-Agent": "hachidori-mpv", Accept: "application/vnd.github+json" };
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  const response = await fetch(`https://api.github.com/repos/${REPOSITORY}/releases/tags/${encodeURIComponent(tag)}`, { headers });
+  if (response.status === 403 || response.status === 429) {
+    throw new Error("GitHub's API limit for this network is used up and the release files could not be found without it. "
+      + "Try again in an hour, or set GITHUB_TOKEN to a GitHub token first.");
+  }
+  if (response.status === 404) throw new Error(`Hachidori has no release ${tag}`);
+  if (!response.ok) throw new Error(`GitHub API: HTTP ${response.status}`);
+  const release = await response.json();
+  const asset = suffix => {
+    const found = release.assets.find(entry => entry.name.endsWith(suffix));
+    return found ? { name: found.name, url: found.browser_download_url } : null;
+  };
+  return { zip: asset("-chrome.zip"), sums: asset("-SHA256SUMS.txt") };
+}
+
 async function downloadRelease(tag, into) {
-  const release = await (await github(`https://api.github.com/repos/${REPOSITORY}/releases/tags/${tag}`)).json();
-  const zip = release.assets.find(asset => asset.name.endsWith("-chrome.zip"));
-  const sums = release.assets.find(asset => asset.name.endsWith("-SHA256SUMS.txt"));
+  const { zip, sums } = await releaseAssets(tag);
   if (!zip) throw new Error(`Hachidori ${tag} has no Chrome zip`);
   console.log(`Downloading ${zip.name}…`);
-  const bytes = Buffer.from(await (await github(zip.browser_download_url)).arrayBuffer());
+  const bytes = Buffer.from(await (await download(zip.url)).arrayBuffer());
   if (sums) {
-    const text = await (await github(sums.browser_download_url)).text();
+    const text = await (await download(sums.url)).text();
     const line = text.split("\n").find(entry => entry.trim().endsWith(zip.name));
     const expected = line?.trim().split(/\s+/)[0]?.toLowerCase();
     const actual = createHash("sha256").update(bytes).digest("hex");
@@ -192,5 +235,7 @@ async function main() {
 
 main().catch(error => {
   console.error(`prepare-hachidori: ${error.message}`);
-  process.exit(1);
+  // Not process.exit(): on Windows, Node 24 can abort with a libuv assertion
+  // when it exits while fetch's sockets are still closing.
+  process.exitCode = 1;
 });
